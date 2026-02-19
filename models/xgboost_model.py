@@ -13,7 +13,7 @@ import os
 
 #########################
 ### NOTES : #############
-# PB sur calcul de SHAP values
+# PB sur calcul de SHAP values (calculé sur 50 liens seulement)
 # car PBs de compatibilité ac mon Mac
 # plus optimal sur notebook pour l'instant
 

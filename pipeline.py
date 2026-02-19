@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import networkx as nx
 import torch
@@ -6,14 +7,13 @@ import random
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
-from models.GNNmodels import *
-
-from models.xgboost_model import * 
 
 # Import des fichiers locaux
 import config
 from utilis_graph import load_graph ,reach_n_liens_cible, save_graph_custom, displayGraphPyViz, displayGraphPositionNetworkX
 from utilis_data import build_hybrid_dataset_from_scratch, verify_dataset, prepare_balanced_data
+from models.GNNmodels import *
+from models.xgboost_model import * 
 
 
 def run_generate_graphs():
@@ -122,11 +122,11 @@ def run_prepare_datasets_for_GNN():
         torch.save(my_dataset, dataset_path)
         print(f"\n💾 Dataset PyG sauvegardé sous : {dataset_path}")
 
-def run_xgboost_pipeline(scenario = "Total (Pos + SBM + Topo)"):
+def run_xgboost_pipeline(graphName, scenario = "Total (Pos + SBM + Topo)"):
     print("📂 Chargement du graphe pour XGBoost...")
     # On charge le graphe hybride généré à l'étape 'generate'
     try:
-        G = load_graph("outputs/graphs/G_Hybride_1000n_3494e_p04.json")
+        G = load_graph(f"outputs/graphs/{graphName}")
     except FileNotFoundError:
         print("❌ Graphe introuvable. Lancez d'abord 'generate'.")
         return
@@ -186,6 +186,31 @@ def run_gnn_pipeline():
     print(f"\n🏆 Entraînement GNN terminé.")
     print(f"Final Best AUC : {final_auc:.4f}")
 
+
+def select_graph_interactively():
+    graph_dir = "outputs/graphs"
+    # On liste uniquement les fichiers .json ou .graphml
+    files = [f for f in os.listdir(graph_dir) if f.endswith(('.json', '.graphml'))]
+    
+    if not files:
+        print(f"❌ Aucun graphe trouvé dans {graph_dir}")
+        return None
+
+    print("\n--- 📂 Liste des graphes disponibles ---")
+    for i, f in enumerate(files):
+        print(f"[{i}] {f}")
+    
+    try:
+        choice = int(input("\n👉 Entrez le numéro du graphe à utiliser : "))
+        if 0 <= choice < len(files):
+            return files[choice]
+        else:
+            print("❌ Numéro invalide.")
+            return None
+    except ValueError:
+        print("❌ Veuillez entrer un nombre.")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(description="Pipeline de génération et processing de graphes")
     
@@ -200,6 +225,7 @@ def main():
 
     # Sous-commande : xgboost
     parser_xgboost = subparsers.add_parser('xgboost', help='Entraine et évalue un modèle xgboost à partir des graphes générés + Analyse SHAP')
+    parser_xgboost.add_argument('--graph', type=str, help='Nom du fichier JSON dans outputs/graphs')
 
     # Sous-commande : trainGNN
     parser_trainGNN = subparsers.add_parser('trainGNN', help='Entraine et évalue un modèle GNN hybride (GCN pour noeuds feat. + MLP pour paires feat.)')
@@ -217,8 +243,12 @@ def main():
         run_prepare_datasets_for_GNN()
 
     elif args.command == 'xgboost':
-        print("Lancement de la génération du modèle xgboost ...")
-        run_xgboost_pipeline()
+        # Si l'utilisateur n'a pas précisé de graphe, on appele la fonction de sélection interactive
+        graph_name = args.graph if args.graph else select_graph_interactively()
+        
+        if graph_name:
+            print(f"🚀 Lancement de l'analyse sur : {graph_name}")
+            run_xgboost_pipeline(graph_name)
 
     elif args.command == 'trainGNN':
         print("Lancement du training du GNN ...")

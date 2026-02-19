@@ -286,3 +286,52 @@ def prepare_balanced_data(G, negative_ratio=1.0):
             neg_count += 1
             
     return pd.DataFrame(data)
+
+
+def prepare_balanced_data_unknown_pos_and_community(G, negative_ratio=1.0):
+    edges = list(G.edges())
+    nodes = list(G.nodes())
+    n_pos = len(edges)
+    data = []
+    random.seed(42)
+
+    # --- ÉTAPE CRUCIALE : PRÉ-CALCUL ---
+    # On calcule les métriques globales une seule fois ici
+    print("Pré-calcul des métriques de nœuds...")
+    precomputed = {
+        'pr': nx.pagerank(G),                    # PageRank (PR)
+        'lcc': nx.clustering(G),                # Local Clustering Coefficient (LCC)
+        'and': nx.average_neighbor_degree(G),   # Average Neighbor Degree (AND)
+        'dc': nx.degree_centrality(G)           # Degree Centrality (DC)
+    }
+    
+    # --- 1. CLASSE POSITIVE ---
+    for u, v in edges:
+        topo = get_topology_features(G, u, v, precomputed, is_existing_edge=True)
+        
+        row = {
+            'u': u, 
+            'v': v,
+            'target': 1
+        }
+        row.update(topo)
+        data.append(row)
+    
+    # --- 2. CLASSE NÉGATIVE ---
+    n_neg_target = int(n_pos * negative_ratio)
+    neg_count = 0
+    while neg_count < n_neg_target:
+        u, v = random.sample(nodes, 2)
+        if not G.has_edge(u, v) and u != v:
+            topo = get_topology_features(G, u, v, precomputed, is_existing_edge=False)
+            
+            row = {
+                'u': u, 
+                'v': v,
+                'target': 0
+            }
+            row.update(topo)
+            data.append(row)
+            neg_count += 1
+            
+    return pd.DataFrame(data)
