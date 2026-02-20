@@ -11,89 +11,6 @@ import seaborn as sns
 
 import config  # Import du fichier de constantes
 
-def get_topology_features(G, u, v, precomputed, is_existing_edge=False):
-    """Calcule les métriques topologiques pour une paire (u, v) avec optimisation SP."""
-    # 1. Métriques de voisinage
-    # On utilise try/except pour Adamic-Adar car il crash si aucun voisin commun
-    try:
-        aa = next(nx.adamic_adar_index(G, [(u, v)]))[2]
-    except (ZeroDivisionError, StopIteration):
-        aa = 0.0
-        
-    jc = next(nx.jaccard_coefficient(G, [(u, v)]))[2]
-    pa = next(nx.preferential_attachment(G, [(u, v)]))[2]
-    cn = len(list(nx.common_neighbors(G, u, v)))
-
-    # 2. Métriques de Nœuds (extraites du pré-calcul)
-    node_features = {
-        'pr_u': precomputed['pr'].get(u, 0), 'pr_v': precomputed['pr'].get(v, 0),
-        'lcc_u': precomputed['lcc'].get(u, 0), 'lcc_v': precomputed['lcc'].get(v, 0),
-        'and_u': precomputed['and'].get(u, 0), 'and_v': precomputed['and'].get(v, 0),
-        'dc_u': precomputed['dc'].get(u, 0), 'dc_v': precomputed['dc'].get(v, 0)
-    }
-
-    # 3. Shortest Path (SP) optimisé avec cutoff
-    INF_DIST = 10
-    if is_existing_edge:
-        G.remove_edge(u, v)
-        lengths = nx.single_source_shortest_path_length(G, u, cutoff=INF_DIST)
-        sp = lengths.get(v, INF_DIST)
-        G.add_edge(u, v)
-    else:
-        lengths = nx.single_source_shortest_path_length(G, u, cutoff=INF_DIST)
-        sp = lengths.get(v, INF_DIST)
-
-    topo_res = {'cn': cn, 'aa': aa, 'jc': jc, 'pa': pa, 'sp': sp}
-    topo_res.update(node_features)
-    return topo_res
-
-def prepare_balanced_data(G, negative_ratio=1.0):
-    """Prépare un DataFrame pour des modèles classiques (RandomForest, etc.)"""
-    edges = list(G.edges())
-    nodes = list(G.nodes())
-    random.seed(42)
-
-    print("📊 Pré-calcul des métriques globales...")
-    precomputed = {
-        'pr': nx.pagerank(G),
-        'lcc': nx.clustering(G),
-        'and': nx.average_neighbor_degree(G),
-        'dc': nx.degree_centrality(G)
-    }
-    
-    data = []
-    
-    # --- POSITIFS ---
-    for u, v in edges:
-        topo = get_topology_features(G, u, v, precomputed, is_existing_edge=True)
-        row = {
-            'u': u, 'v': v, 
-            'dist': math.dist(G.nodes[u]['pos'], G.nodes[v]['pos']),
-            'same_block': 1 if G.nodes[u].get('block') == G.nodes[v].get('block') else 0,
-            'target': 1
-        }
-        row.update(topo)
-        data.append(row)
-    
-    # --- NÉGATIFS ---
-    n_neg_target = int(len(edges) * negative_ratio)
-    neg_count = 0
-    while neg_count < n_neg_target:
-        u, v = random.sample(nodes, 2)
-        if not G.has_edge(u, v) and u != v:
-            topo = get_topology_features(G, u, v, precomputed, is_existing_edge=False)
-            row = {
-                'u': u, 'v': v,
-                'dist': math.dist(G.nodes[u]['pos'], G.nodes[v]['pos']),
-                'same_block': 1 if G.nodes[u].get('block') == G.nodes[v].get('block') else 0,
-                'target': 0
-            }
-            row.update(topo)
-            data.append(row)
-            neg_count += 1
-            
-    return pd.DataFrame(data)
-
 def build_hybrid_dataset_from_scratch(G, num_negative_samples=None):
     """Génère un objet PyTorch Geometric Data pour GNN."""
     nodes = sorted(list(G.nodes()))
@@ -193,13 +110,20 @@ def verify_dataset(pyg_data, feature_idx_to_plot=0, feature_name="Feature"):
 ########################################
 # FONCTIONS DE DATA CLEAN POUR XGBOOST #
 ########################################
+
 def get_topology_features(G, u, v, precomputed, is_existing_edge=False):
     """Calcule les métriques topologiques pour une paire (u, v)"""
+    
     # 1. Métriques de paires (Voisinage)
     aa = next(nx.adamic_adar_index(G, [(u, v)]))[2]
     jc = next(nx.jaccard_coefficient(G, [(u, v)]))[2]
     pa = next(nx.preferential_attachment(G, [(u, v)]))[2]
     cn = len(list(nx.common_neighbors(G, u, v)))
+
+    try:
+        sp = nx.shortest_path_length(G, source=u, target=v)
+    except nx.NetworkXNoPath:
+        sp = 0 
 
     # 2. Métriques de Nœuds (extraites du dictionnaire pré-calculé)
     # On ajoute les versions pour u et pour v
@@ -210,51 +134,58 @@ def get_topology_features(G, u, v, precomputed, is_existing_edge=False):
         'dc_u': precomputed['dc'].get(u, 0), 'dc_v': precomputed['dc'].get(v, 0)
     }
 
-    # 3. Shortest Path (SP)
-    if is_existing_edge:
-        G.remove_edge(u, v)
-        try:
-            sp = nx.shortest_path_length(G, source=u, target=v)
-        except nx.NetworkXNoPath:
-            sp = 0 
-        G.add_edge(u, v)
-    else:
-        try:
-            sp = nx.shortest_path_length(G, source=u, target=v)
-        except nx.NetworkXNoPath:
-            sp = 0
-
     # Fusion de toutes les métriques
-    topo_res = {'cn': cn, 'aa': aa, 'jc': jc, 'pa': pa, 'sp': sp}
+    topo_res = {'cn': cn, 'aa': aa, 'jc': jc, 'pa': pa, 
+                'sp': sp
+               }
     topo_res.update(node_features)
     
     return topo_res
 
-def prepare_balanced_data(G, negative_ratio=1.0):
-    edges = list(G.edges())
+
+def prepare_balanced_data(G, test_size = 0.15, negative_ratio=1.0):
+    all_edges = list(G.edges())
     nodes = list(G.nodes())
-    n_pos = len(edges)
+    n_pos = len(all_edges)
     data = []
     random.seed(42)
 
-    # --- ÉTAPE CRUCIALE : PRÉ-CALCUL ---
-    # On calcule les métriques globales une seule fois ici
+    # 1. Extraction des arêtes pour le split
+    random.shuffle(all_edges)
+    
+    split_idx = int(len(all_edges) * (1 - test_size))
+    train_edges = all_edges[:split_idx]
+    test_edges = all_edges[split_idx:]
+    
+    # 2. Création du graphe d'entraînement (G sans le test set)
+    # C'est sur ce graphe qu'on va tout calculer
+    G_train = nx.Graph()
+    G_train.add_nodes_from(G.nodes())
+    G_train.add_edges_from(train_edges)
+    
+    print(f"Graphe original: {G.number_of_edges()} liens")
+    print(f"Graphe d'entraînement: {G_train.number_of_edges()} liens")
+    print(f"Liens cachés pour le test: {len(test_edges)}")
+    
+
+    # --- ÉTAPE DE PRÉ-CALCUL ---
+    # On calcule les métriques de noeuds une seule fois ici
     print("Pré-calcul des métriques de nœuds...")
     precomputed = {
-        'pr': nx.pagerank(G),                    # PageRank (PR)
-        'lcc': nx.clustering(G),                # Local Clustering Coefficient (LCC)
-        'and': nx.average_neighbor_degree(G),   # Average Neighbor Degree (AND)
-        'dc': nx.degree_centrality(G)           # Degree Centrality (DC)
+        'pr': nx.pagerank(G_train),                    # PageRank (PR)
+        'lcc': nx.clustering(G_train),                # Local Clustering Coefficient (LCC)
+        'and': nx.average_neighbor_degree(G_train),   # Average Neighbor Degree (AND)
+        'dc': nx.degree_centrality(G_train)           # Degree Centrality (DC)
     }
     
     # --- 1. CLASSE POSITIVE ---
-    for u, v in edges:
+    for u, v in all_edges:
         pos_u, pos_v = G.nodes[u].get('pos'), G.nodes[v].get('pos')
         dist = math.dist(pos_u, pos_v)
         same_block = 1 if G.nodes[u].get('block') == G.nodes[v].get('block') else 0
         
         # Passage du dictionnaire precomputed
-        topo = get_topology_features(G, u, v, precomputed, is_existing_edge=True)
+        topo = get_topology_features(G_train, u, v, precomputed, is_existing_edge=True)
         
         row = {
             'u': u, 'v': v, 'dist': dist, 'same_block': same_block,
@@ -274,7 +205,7 @@ def prepare_balanced_data(G, negative_ratio=1.0):
             dist = math.dist(pos_u, pos_v)
             same_block = 1 if G.nodes[u].get('block') == G.nodes[v].get('block') else 0
             
-            topo = get_topology_features(G, u, v, precomputed, is_existing_edge=False)
+            topo = get_topology_features(G_train, u, v, precomputed, is_existing_edge=False)
             
             row = {
                 'u': u, 'v': v, 'dist': dist, 'same_block': same_block,
@@ -284,30 +215,49 @@ def prepare_balanced_data(G, negative_ratio=1.0):
             row.update(topo)
             data.append(row)
             neg_count += 1
-            
+
+    print(f"DataFrame créé <3 : {len(data)} paires de noeuds choisies")
     return pd.DataFrame(data)
 
 
-def prepare_balanced_data_unknown_pos_and_community(G, negative_ratio=1.0):
-    edges = list(G.edges())
+def prepare_balanced_data_unknown_pos_and_community(G, test_size = 0.15, negative_ratio=1.0):
+    all_edges = list(G.edges())
     nodes = list(G.nodes())
-    n_pos = len(edges)
+    n_pos = len(all_edges)
     data = []
     random.seed(42)
 
-    # --- ÉTAPE CRUCIALE : PRÉ-CALCUL ---
-    # On calcule les métriques globales une seule fois ici
+    # 1. Extraction des arêtes pour le split
+    random.shuffle(all_edges)
+    
+    split_idx = int(len(all_edges) * (1 - test_size))
+    train_edges = all_edges[:split_idx]
+    test_edges = all_edges[split_idx:]
+    
+    # 2. Création du graphe d'entraînement (G sans le test set)
+    # C'est sur ce graphe qu'on va tout calculer
+    G_train = nx.Graph()
+    G_train.add_nodes_from(G.nodes())
+    G_train.add_edges_from(train_edges)
+    
+    print(f"Graphe original: {G.number_of_edges()} liens")
+    print(f"Graphe d'entraînement: {G_train.number_of_edges()} liens")
+    print(f"Liens cachés pour le test: {len(test_edges)}")
+    
+
+    # --- ÉTAPE DE PRÉ-CALCUL ---
+    # On calcule les métriques de noeuds une seule fois ici
     print("Pré-calcul des métriques de nœuds...")
     precomputed = {
-        'pr': nx.pagerank(G),                    # PageRank (PR)
-        'lcc': nx.clustering(G),                # Local Clustering Coefficient (LCC)
-        'and': nx.average_neighbor_degree(G),   # Average Neighbor Degree (AND)
-        'dc': nx.degree_centrality(G)           # Degree Centrality (DC)
+        'pr': nx.pagerank(G_train),                    # PageRank (PR)
+        'lcc': nx.clustering(G_train),                # Local Clustering Coefficient (LCC)
+        'and': nx.average_neighbor_degree(G_train),   # Average Neighbor Degree (AND)
+        'dc': nx.degree_centrality(G_train)           # Degree Centrality (DC)
     }
     
     # --- 1. CLASSE POSITIVE ---
-    for u, v in edges:
-        topo = get_topology_features(G, u, v, precomputed, is_existing_edge=True)
+    for u, v in all_edges:
+        topo = get_topology_features(G_train, u, v, precomputed, is_existing_edge=True)
         
         row = {
             'u': u, 
@@ -323,7 +273,7 @@ def prepare_balanced_data_unknown_pos_and_community(G, negative_ratio=1.0):
     while neg_count < n_neg_target:
         u, v = random.sample(nodes, 2)
         if not G.has_edge(u, v) and u != v:
-            topo = get_topology_features(G, u, v, precomputed, is_existing_edge=False)
+            topo = get_topology_features(G_train, u, v, precomputed, is_existing_edge=False)
             
             row = {
                 'u': u, 
@@ -333,5 +283,6 @@ def prepare_balanced_data_unknown_pos_and_community(G, negative_ratio=1.0):
             row.update(topo)
             data.append(row)
             neg_count += 1
-            
+
+    print(f"DataFrame créé <3 : {len(data)} paires de noeuds choisies")
     return pd.DataFrame(data)

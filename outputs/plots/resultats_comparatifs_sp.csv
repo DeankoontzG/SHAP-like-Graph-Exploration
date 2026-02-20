@@ -1,0 +1,9 @@
+Dataset;AUC-ROC;F1-Score;VP (True Pos);VN (True Neg);FP (False Pos);FN (False Neg);Hits@50
+Infomap Communities;0.9996;0.9918;2655;2483;20;24;1.0
+DeepWalk;0.9991;0.9863;2669;2676;34;40;1.0
+Louvain Communities;0.9991;0.985;2665;2673;37;44;1.0
+Homophilie and Louvain;0.9991;0.9862;2671;2673;37;38;1.0
+N2V Homophilie;0.999;0.9854;2667;2673;37;42;1.0
+N2V Structural;0.999;0.9843;2665;2669;41;44;1.0
+Homophilie & Structural;0.999;0.9852;2665;2674;36;44;1.0
+Heuristics Only;0.9987;0.9837;2661;2670;40;48;1.0
